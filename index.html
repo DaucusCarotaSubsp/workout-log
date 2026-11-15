@@ -238,6 +238,10 @@ textarea{min-height:104px;resize:vertical;line-height:1.6}
 .ptotal>span{display:block;background:rgba(255,255,255,.14);border-radius:3px;overflow:hidden;min-width:3px}
 .ptotal>span i{display:block;height:100%;width:0;background:var(--stage-accent)}
 .ptotal>span.rest i{background:#8a97aa}
+.p-speed{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap}
+.p-speed button{min-height:36px;padding:0 12px;border-radius:99px;font-size:14px;font-weight:700;color:var(--stage-ink);background:rgba(255,255,255,.1);font-family:var(--font-num)}
+.p-speed button[aria-pressed=true]{background:var(--stage-ink);color:#06080c}
+.p-stage video.mirror{transform:scaleX(-1)}
 .p-ctrl{display:flex;align-items:center;justify-content:center;gap:18px}
 .p-ctrl .main{width:72px;height:72px;background:var(--stage-ink);color:#06080c}
 .p-ctrl .main svg{width:30px;height:30px}
@@ -548,6 +552,33 @@ function entryFrom(ex){
 }
 function fmtPR(p,bw){return bw?((p.w>0?'+'+fmtKg(p.w)+'kg':'自重')+' × '+p.wReps+'回'):(fmtKg(p.w)+'kg × '+p.wReps+'回');}
 function exWeightText(ex){var m=wMode(ex);if(m==='ext')return ' ・ '+(ex.tWeight?fmtKg(ex.tWeight)+'kg':'重量記録');if(m==='bw')return ' ・ 自重'+(ex.tWeight?'＋'+fmtKg(ex.tWeight)+'kg':'＋加重');return '';}
+
+/* ---- calorie estimate (MET method; an estimate only) ---- */
+var KCAL_FACTOR=1.05,REST_SHARE=0.2,REST_MET=2.0;
+function bodyKgSet(){var v=+((S.profileData||{}).bodyKg);return v>=20&&v<=300;}
+function bodyKg(){return bodyKgSet()?+S.profileData.bodyKg:65;}
+var LEVELS=[['light','軽め'],['normal','ふつう'],['hard','きつい']];
+function entryMet(e){
+  var ex=exById(e.exId),lv=(ex&&ex.intensity)||'normal';
+  if(e.w&&!e.bw)return ({light:3.5,normal:5.0,hard:6.0})[lv]||5.0;
+  return ({light:3.5,normal:3.8,hard:7.5})[lv]||3.8;
+}
+function logKcal(l){
+  var es=l.entries||[];if(!es.length)return null;
+  var sets=0,m=0;
+  es.forEach(function(e){var n=Math.max(1,(e.sets||[]).length);sets+=n;m+=entryMet(e)*n;});
+  var met=(m/sets)*(1-REST_SHARE)+REST_MET*REST_SHARE,est=!(l.dur>0),sec=est?sets*75:l.dur;
+  return {kcal:Math.round(met*bodyKg()*sec/3600*KCAL_FACTOR),min:Math.max(1,Math.round(sec/60)),est:est};
+}
+function dayKcal(logs){var t=0;logs.forEach(function(l){var k=logKcal(l);if(k)t+=k.kcal;});return t;}
+var IS_IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+var SHORTCUT_NAME='WorkoutToHealth';
+function healthLink(l){
+  var k=logKcal(l);if(!k)return null;
+  var start=new Date((l.ts||Date.now())-k.min*60000);
+  var payload=JSON.stringify({name:l.workoutName||'Workout',minutes:k.min,kcal:k.kcal,start:start.toISOString()});
+  return 'shortcuts://run-shortcut?name='+encodeURIComponent(SHORTCUT_NAME)+'&input=text&text='+encodeURIComponent(payload);
+}
 /* weekly goal helpers */
 function cfg(){var p=S.profileData||{};return {weeklyGoal:clamp(parseInt(p.weeklyGoal,10)||3,1,7),remindOn:!!p.remindOn,remindTime:p.remindTime||'20:00',remindDays:Array.isArray(p.remindDays)?p.remindDays:[0,1,2,3,4,5,6],backupEvery:(p.backupEvery==null?7:(+p.backupEvery||0))};}
 function daySet(){var o={};S.logs.forEach(function(l){o[l.date]=1;});return o;}
@@ -644,6 +675,7 @@ function vToday(){
     h('div',{class:'sub'},logs.length?'今日の合計':'今日はまだ記録がありません'),
     h('div',{class:'hero-num'},h('span',{class:'big'},reps),h('span',{class:'unit'},'回'),target?h('span',{class:'goal'},'目標 '+target+'回 ・ '+pct+'%'):null),
     target?meter(pct):null,
+    logs.length?h('div',{class:'sub'},'推定消費 約'+dayKcal(logs)+' kcal'+(bodyKgSet()?'':'（体重は仮の65kg。設定で変更）')):null,
     h('div',{class:'row'},
       h('button',{class:'btn primary',type:'button',onclick:function(){openLog({date:t});}},icon('log'),'今日の記録をつける')));
   var wrap=h('div',{class:'view'});
@@ -670,7 +702,8 @@ function vToday(){
 function logCard(l){
   return h('div',{class:'entry'},
     h('div',{class:'hd'},
-      h('div',{class:'grow'},h('div',{class:'t'},l.workoutName||'単発の記録'),h('div',{class:'cap'},fmtMD(l.date)+(l.dur?' ・ '+fmtDur(l.dur):''))),
+      h('div',{class:'grow'},h('div',{class:'t'},l.workoutName||'単発の記録'),h('div',{class:'cap'},fmtMD(l.date)+(l.dur?' ・ '+fmtDur(l.dur):'')+(logKcal(l)?' ・ 約'+logKcal(l).kcal+' kcal':''))),
+      (IS_IOS&&logKcal(l))?h('a',{class:'btn sm ghost',href:healthLink(l),'aria-label':'ヘルスケアに送る（ショートカット）'},'ヘルスケアへ'):null,
       h('button',{class:'btn sm ghost',type:'button',onclick:function(){openLog({log:l});}},icon('edit'),'編集')),
     h('div',{class:'meters'},(l.entries||[]).map(function(e){
       var r=entryReps(e),tg=entryTarget(e);
@@ -712,6 +745,7 @@ function openEx(ex){
   var wlbl=h('span',{class:'lbl'},'');
   var wbox=h('div',{class:'field'},wlbl,wst.el);
   var modeNote=h('p',{class:'note'},'');
+  var intens=d.intensity||'normal';
   var modeSeg=h('div',{class:'seg',role:'group','aria-label':'重量の記録'});
   var MODES=[['off','記録しない'],['ext','重量あり'],['bw','自重＋加重']];
   function syncW(){
@@ -752,7 +786,8 @@ function openEx(ex){
       h('div',{class:'field'},h('span',{class:'lbl'},'動画'),vbox,fileI),
       field('動作の説明',descI,'ex-desc'),
       h('div',{class:'three'},h('div',{class:'field'},h('span',{class:'lbl'},'セット数'),sets.el),h('div',{class:'field'},h('span',{class:'lbl'},'目標レップ数（1セット）'),reps.el)),
-      h('div',{class:'field'},h('span',{class:'lbl'},'重量の記録'),modeSeg,modeNote),wbox],
+      h('div',{class:'field'},h('span',{class:'lbl'},'重量の記録'),modeSeg,modeNote),wbox,
+      segField('運動の強さ（カロリー計算用）',LEVELS,intens,function(v){intens=v;})],
     foot:foot,onClose:function(){if(objUrl)URL.revokeObjectURL(objUrl);}});
   setTimeout(function(){if(isNew)nameI.focus();},50);
   async function save(){
@@ -763,7 +798,7 @@ function openEx(ex){
       var video=d.video,toDrop=null,msg=isNew?'種目を追加しました':'保存しました';
       if(newFile){toast('動画を保存中…');var r=await storeVideo(newFile);toDrop=d.video;video=r.video;if(r.note)msg=r.note;}
       else if(removed){toDrop=d.video;video=null;}
-      await store.set('exercises',d.id,{name:name,desc:descI.value.trim(),tSets:sets.get(),tReps:reps.get(),weightMode:mode,useWeight:mode!=='off',tWeight:mode!=='off'?wst.get():0,video:video,slot:d.slot==null?pickSlot(S.ex):d.slot,created:d.created||Date.now()});
+      await store.set('exercises',d.id,{name:name,desc:descI.value.trim(),tSets:sets.get(),tReps:reps.get(),intensity:intens,weightMode:mode,useWeight:mode!=='off',tWeight:mode!=='off'?wst.get():0,video:video,slot:d.slot==null?pickSlot(S.ex):d.slot,created:d.created||Date.now()});
       if(toDrop)await dropVideo(toDrop);
       s.close();toast(msg);
     }catch(e){toast('保存できませんでした。動画が大きすぎるか、保存領域が足りない可能性があります。');busy=false;saveBtn.disabled=false;}
@@ -893,9 +928,11 @@ function openLog(o){
   dateI.addEventListener('change',function(){if(dateI.value){d.date=dateI.value;drawEntries();}});
   var box=h('div',{class:'list'});
   var total=h('div',{class:'sub'});
+  var durSt=stepper({label:'所要時間',value:Math.round((d.dur||0)/60),min:0,max:300,unit:'分',onChange:function(v){d.dur=v*60;refreshTotal();}});
   function refreshTotal(){
     var r=0,t=0;d.entries.forEach(function(e){r+=entryReps(e);t+=entryTarget(e);});
-    total.textContent='合計 '+r+'回'+(t?' ／ 目標 '+t+'回（'+Math.round(r/t*100)+'%）':'');
+    var kk=logKcal(d);
+    total.textContent='合計 '+r+'回'+(t?' ／ 目標 '+t+'回（'+Math.round(r/t*100)+'%）':'')+(kk?' ／ 推定 約'+kk.kcal+' kcal（'+kk.min+'分'+(kk.est?'・目安':'')+'）':'');
   }
   function drawEntries(){
     box.innerHTML='';
@@ -941,6 +978,7 @@ function openLog(o){
   var s=sheet({title:isNew?'記録をつける':'記録を編集',wide:true,
     body:[field('日付',dateI,'lg-date'),
       h('div',{class:'field'},h('span',{class:'lbl'},'ワークアウトから読み込む'),chips),
+      h('div',{class:'field'},h('span',{class:'lbl'},'所要時間（0分のままならセット数から目安で計算）'),durSt.el),
       isNew&&d.entries.length?h('p',{class:'note'},'目標の回数が入っています。実際にできた回数に直してください。'):null,
       box,total],foot:foot});
   drawEntries();
@@ -1011,6 +1049,9 @@ function buildPlayer(){
   var playB=h('button',{class:'pbtn main',type:'button','aria-label':'再生・一時停止',onclick:toggle},icon('play'));
   var muteB=h('button',{class:'pbtn',type:'button','aria-label':'音のオン・オフ',onclick:function(){pref.set('sound',!pref.get('sound',true));syncSound();}});
   var cnt=h('div',{class:'c'},'');
+  var speedRow=h('div',{class:'p-speed',role:'group','aria-label':'動画の再生速度'});
+  [0.25,0.5,0.75,1].forEach(function(r){var b=h('button',{type:'button','data-r':String(r),'aria-pressed':'false','aria-label':'再生速度'+r+'倍',onclick:function(){pref.set('rate',r);applyRate();}},'×'+r);speedRow.appendChild(b);});
+  speedRow.appendChild(h('button',{type:'button',class:'mir','aria-pressed':'false','aria-label':'動画を左右反転',onclick:function(){pref.set('mirror',!pref.get('mirror',false));applyRate();}},'左右反転'));
   var root=h('div',{class:'player',id:'player',role:'dialog','aria-modal':'true','aria-label':P.w.name+'を再生'},
     h('div',{class:'in'},
       h('div',{class:'p-top'},h('button',{class:'pbtn',type:'button','aria-label':'再生画面を閉じる',onclick:closePlayer},icon('close')),h('div',{class:'t'},P.w.name),cnt,muteB),
@@ -1019,19 +1060,28 @@ function buildPlayer(){
         h('div',{class:'pb'},bTime,bBar),
         h('div',{class:'pb'},tTime,tBar)),
       next,
+      speedRow,
       h('div',{class:'p-ctrl'},
         h('button',{class:'pbtn','aria-label':'前へ',type:'button',onclick:function(){prevBlock();}},icon('prev')),
         playB,
         h('button',{class:'pbtn','aria-label':'次へ',type:'button',onclick:function(){nextBlock();}},icon('next')))));
   document.body.appendChild(root);
-  P.el={root:root,v:v,ph:ph,big:big,tag:tag,start:startO,cd:cdO,done:doneO,title:title,bTime:bTime,tTime:tTime,bFill:bFill,bBar:bBar,tBar:tBar,tFills:tFills,next:next,play:playB,mute:muteB,cnt:cnt};
-  syncSound();showBlock();paint();
+  P.el={root:root,v:v,ph:ph,big:big,tag:tag,start:startO,cd:cdO,done:doneO,title:title,bTime:bTime,tTime:tTime,bFill:bFill,bBar:bBar,tBar:tBar,tFills:tFills,next:next,speed:speedRow,play:playB,mute:muteB,cnt:cnt};
+  syncSound();applyRate();showBlock();paint();
   root.addEventListener('keydown',function(e){
     if(e.key===' '&&P.started&&!P.finished){e.preventDefault();toggle();}
     else if(e.key==='ArrowRight'&&P.started)nextBlock();
     else if(e.key==='ArrowLeft'&&P.started)prevBlock();
   });
   var sb=startO.querySelector('button');if(sb)sb.focus();
+}
+function vRate(){var r=+pref.get('rate',1);return r>0&&r<=1?r:1;}
+function applyRate(){
+  if(!P)return;var v=P.el.v,r=vRate();
+  v.defaultPlaybackRate=r;v.playbackRate=r;
+  v.classList.toggle('mirror',!!pref.get('mirror',false));
+  Array.prototype.forEach.call(P.el.speed.querySelectorAll('button[data-r]'),function(b){b.setAttribute('aria-pressed',String(+b.dataset.r===r));});
+  var m=P.el.speed.querySelector('.mir');if(m)m.setAttribute('aria-pressed',String(!!pref.get('mirror',false)));
 }
 function syncSound(){
   if(!P)return;var on=pref.get('sound',true);
@@ -1061,7 +1111,7 @@ function showBlock(){
   e.cnt.textContent=(P.i+1)+' / '+P.seq.length;
   if(P.running)playVid();
 }
-function playVid(){var p=P.el.v.play();if(p&&p.catch)p.catch(function(){});}
+function playVid(){applyRate();var p=P.el.v.play();if(p&&p.catch)p.catch(function(){});}
 function paint(){
   if(!P)return;
   var b=P.seq[P.i],e=P.el;
@@ -1148,7 +1198,8 @@ function finish(){
   P.el.big.textContent='';
   P.el.play.innerHTML='';P.el.play.appendChild(icon('play'));
   var d=P.el.done;d.hidden=false;d.innerHTML='';
-  d.appendChild(h('div',null,h('div',{class:'sub',style:'color:var(--stage-dim)'},'おつかれさまでした'),h('div',{class:'big'},fmtT(dur)),h('div',{class:'sub',style:'color:var(--stage-dim)'},w.name)));
+  var kc=logKcal({entries:uniqueExIds(w.blocks).map(function(id){var ex=exById(id);return ex?entryFrom(ex):null;}).filter(Boolean),dur:dur});
+  d.appendChild(h('div',null,h('div',{class:'sub',style:'color:var(--stage-dim)'},'おつかれさまでした'),h('div',{class:'big'},fmtT(dur)),kc?h('div',{class:'sub',style:'color:var(--stage-dim)'},'推定消費 約'+kc.kcal+' kcal'):null,h('div',{class:'sub',style:'color:var(--stage-dim)'},w.name)));
   d.appendChild(h('button',{class:'btn primary',type:'button',onclick:function(){closePlayer();openLog({date:todayS(),workout:w,dur:dur});}},icon('log'),'今日の記録をつける'));
   d.appendChild(h('button',{class:'btn ghost',type:'button',style:'color:var(--stage-ink);border-color:rgba(255,255,255,.3)',onclick:closePlayer},'閉じる'));
   paint();
@@ -1371,7 +1422,7 @@ function vStats(){
   wrap.appendChild(f);
   var R=statsRange(),logs=R.logs;
   if(!S.logs.length){wrap.appendChild(emptyBlock('記録がまだありません。「今日」タブから記録をつけると、ここにグラフが出ます。','記録をつける',function(){openLog({date:todayS()});}));return wrap;}
-  var reps=0,target=0,dur=0,dayset={};
+  var reps=0,target=0,dur=0,dayset={},kcalSum=dayKcal(logs);
   logs.forEach(function(l){dayset[l.date]=1;dur+=l.dur||0;(l.entries||[]).forEach(function(e){reps+=entryReps(e);target+=entryTarget(e);});});
   var tile=function(l,v,u,d){return h('div',{class:'tile'},h('div',{class:'l'},l),h('div',{class:'v num'},v,u?h('small',null,u):null),d?h('div',{class:'d'},d):null);};
   wrap.appendChild(h('div',{class:'tiles'},
@@ -1379,7 +1430,8 @@ function vStats(){
     tile('合計回数',reps,'回',logs.length+'件の記録'),
     tile('目標達成率',target?Math.round(reps/target*100):'-',target?'%':'','実績 ÷ 目標'),
     tile('連続日数',streak(),'日'),
-    tile('トレーニング時間',dur?Math.round(dur/60):'-',dur?'分':'','再生で測った時間')));
+    tile('トレーニング時間',dur?Math.round(dur/60):'-',dur?'分':'','再生で測った時間'),
+    tile('推定消費',kcalSum||'-',kcalSum?'kcal':'','体重'+fmtKg(bodyKg())+'kg'+(bodyKgSet()?'':'（仮）'))));
   if(!logs.length){wrap.appendChild(emptyBlock('この期間の記録がありません。期間を広げてみてください。'));return wrap;}
 
   /* daily stack */
@@ -1523,8 +1575,12 @@ function openSettings(){
   fileI.addEventListener('change',async function(){var f=fileI.files&&fileI.files[0];if(f)await importBackup(f);fileI.value='';});
   var hasSample=[].concat(S.ex,S.wk,S.logs).some(function(x){return x.sample;});
   var hasDb=S.ex.some(function(x){return x.id==='sample-dbpress';}),hasBw=S.ex.some(function(x){return x.id==='sample-pullup';});
+  var kgSt=stepper({label:'体重',value:bodyKg(),min:20,max:300,step:0.5,round:0.5,unit:'kg',onChange:function(v){setCfg({bodyKg:v});}});
   var body=[
     h('div',{class:'field'},h('span',{class:'lbl'},'週の目標'),goalSt.el),
+    h('div',{class:'field'},h('span',{class:'lbl'},'体重（消費カロリーの計算用）'),kgSt.el,
+      h('p',{class:'note'},'消費カロリー＝METs×体重×時間×1.05 の目安です（運動の強さは種目ごとに設定）。実際の値はApple Watchの心拍計測の方が正確です。'+(bodyKgSet()?'':'いまは仮の65kgで計算しています。')),
+      h('p',{class:'note'},'Apple Watchでは、このアプリは開けません。各記録の「ヘルスケアへ」から、運動時間と消費カロリーを「ヘルスケア」に書き込めます（初回のみ、ショートカット「'+SHORTCUT_NAME+'」の作成が必要。手順は同梱のREADME）。書き込むとフィットネス/ヘルスケアで見られ、Watchのアクティビティにも反映されます。')),
     h('div',{class:'field'},h('label',{class:'toggle',for:'set-rem',style:'border-bottom:0;padding:0'},h('span',{class:'lbl'},'リマインド'),remOn),remWrap),
     h('label',{class:'toggle',for:'set-sound'},h('span',null,'再生中の音（カウント音・動画の音）'),sound),
     h('p',{class:'note'},'iPhone・iPadは、消音スイッチ（マナーモード）がオンだとカウント音が鳴りません。'),
@@ -1571,7 +1627,7 @@ function backupName(){return 'WorkOut_'+todayS().replace(/-/g,'')+'.json';}
 function backupPayload(){
   var c=cfg();
   return JSON.stringify({app:'workout-log',version:2,exported:new Date().toISOString(),
-    settings:{weeklyGoal:c.weeklyGoal,remindOn:c.remindOn,remindTime:c.remindTime,remindDays:c.remindDays,backupEvery:c.backupEvery},
+    settings:{weeklyGoal:c.weeklyGoal,remindOn:c.remindOn,remindTime:c.remindTime,remindDays:c.remindDays,backupEvery:c.backupEvery,bodyKg:bodyKgSet()?bodyKg():null},
     exercises:S.ex,workouts:S.wk,logs:S.logs},null,1);
 }
 function markBackup(){setCfg({lastBackup:todayS(),lastBackupAt:Date.now()});}
@@ -1629,7 +1685,7 @@ async function importBackup(f){
     var cols=[['exercises',j.exercises],['workouts',j.workouts],['logs',j.logs]];
     for(var c=0;c<cols.length;c++){var arr=cols[c][1];for(var i=0;i<arr.length;i++){var o=arr[i];if(!o||!o.id)continue;await store.set(cols[c][0],String(o.id),stripId(o));}}
     if(j.settings&&typeof j.settings==='object'){
-      var st={};['weeklyGoal','remindOn','remindTime','remindDays','backupEvery'].forEach(function(k){if(j.settings[k]!==undefined)st[k]=j.settings[k];});
+      var st={};['weeklyGoal','remindOn','remindTime','remindDays','backupEvery','bodyKg'].forEach(function(k){if(j.settings[k]!==undefined&&j.settings[k]!==null)st[k]=j.settings[k];});
       setCfg(st);
     }
     toast('読み込みました');
